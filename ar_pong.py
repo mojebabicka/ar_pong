@@ -3,35 +3,55 @@ import gd_twoen
 import math
 import mediapipe as mp
 import multiprocessing
+import numpy as np
 import particles
 import random
 import time
 import twoen
-
-from multiprocessing.pool import Pool
-from multiprocessing import SimpleQueue
+import urllib.request as ur
 
 
-def init_worker(shared_img):
-    global img_orig
-    img_orig = shared_img
-
-
-def decoder(ip_address):
-    global img_orig
-    cap = cv2.VideoCapture(
-       "https://"
-       + ip_address
-       + "/api/camera/snapshot?width=1280&height=960&quality=60&source=internal&fps=15"
+def get_frame(ip_address, package):
+    stream = ur.urlopen(
+        ur.Request(
+            "http://"
+            + ip_address
+            + "/api/camera/snapshot?width=1280&height=960&quality=60&source=internal&fps=15",
+            headers={"Cache-Control": "no-cache"}
+        )
     )
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 0)
+
+    bts = bytes()
+    counter = 0
+    avg = 0.66
+    idx = 0
+    start_time = time.time()
     while True:
-        success, img_temp = cap.read()
-        img_orig.put(img_temp)
+        bts += stream.read(4096)
+        # print("read_time:", time.time() - start_time, "bts_len:", len(bts))
+        counter += 1
+        a = bts.find(b'\xff\xd8')
+        b = bts.find(b'\xff\xd9')
+        if a != -1 and b != -1:
+            if b > a:
+                jpg = bts[a:b+2]
+                bts = bts[b+2:]
+                img = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
+                package.put(img)
+                elapsed_time = time.time() - start_time
+                new_avg = avg + (elapsed_time - avg) / (idx + 1)
+                print("get_frame:", new_avg)
+                avg = new_avg
+                idx += 1
+                start_time = time.time()
+                # print("counter:", counter)
+                counter = 0
+            else:
+                bts = bts[a:]
+                # print("chop")
 
 
 if __name__ == '__main__':
-    shared_img = SimpleQueue()
     ip_address = input("IP ADDRESS: ")
     password = input("PASSWORD: ")
     test = False
@@ -41,10 +61,13 @@ if __name__ == '__main__':
     if test:
         cap = cv2.VideoCapture(0)
     else:
+        device2 = twoen.Device("192.168.1.198", "admin", "NN")
+        device2.login()
         device = twoen.Device(ip_address, "admin", password)
         device.login()
-        pool = Pool(initializer=init_worker, initargs=(shared_img,))
-        _ = pool.map_async(decoder, (ip_address,))
+        package = multiprocessing.Manager().Queue()
+        p = multiprocessing.Process(target=get_frame, args=(ip_address, package))
+        p.start()
 
     hands = mp.solutions.hands.Hands()
 
@@ -58,18 +81,24 @@ if __name__ == '__main__':
         ball_speed_y = 30
     active = True
 
-    time.sleep(10)
-
-    img = shared_img.get()
+    # img = parent_conn.recv()
+    img = package.get()
     img = cv2.flip(img, 1)
     imgRGB = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
     score = [0, 0]
     while True:
         start_time = time.time()
-        start_time = time.time()
         bearing = math.atan2(ball_speed_y, ball_speed_x)
-        img = shared_img.get()
+        if package.empty():
+            # print("NO_IMAGE")
+            time.sleep(0.05)
+            continue
+        idx = 0
+        while not package.empty():
+            print(idx)
+            img = package.get()
+            idx += 1
         img = cv2.flip(img, 1)
         imgRGB = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         results = hands.process(imgRGB)
@@ -159,7 +188,7 @@ if __name__ == '__main__':
                                 ball_speed_y = -ball_speed_y
 
                 # DRAW PADDLES
-                if True:
+                if False:
                     for point in hand.bounding_box:
                         cv2.circle(
                             img,
@@ -238,20 +267,20 @@ if __name__ == '__main__':
                             1
                         )
 
+        if False:
         # DRAW BALL AND PLAYGROUND
-        for particle in particles.generate(ball_x, ball_y, bearing):
-            try:
-                cv2.circle(
-                    img,
-                    (particle[0], particle[1]),
-                    2,
-                    particle[2],
-                    cv2.FILLED
-                )
-            except IndexError:
-                pass
+            for particle in particles.generate(ball_x, ball_y, bearing):
+                try:
+                    cv2.circle(
+                        img,
+                        (particle[0], particle[1]),
+                        2,
+                        particle[2],
+                        cv2.FILLED
+                    )
+                except IndexError:
+                    pass
 
-        if True:
             # ball_color1 = (random.randrange(50, 150), random.randrange(50, 150), random.randrange(200, 256))
             # ball_color2 = (255-ball_color1[0], 255-ball_color1[1], 255-ball_color1[2])
             ball_color1 = (0, 0, 255)
@@ -377,5 +406,5 @@ if __name__ == '__main__':
                 img,
                 [cv2.IMWRITE_JPEG_QUALITY, 60]
             )[1].tobytes()
-            device.upload_image(image_bytes)
-        print(time.time() - start_time)
+            device2.upload_image(image_bytes)
+        # print("total_time:", time.time() - start_time)

@@ -388,3 +388,71 @@ class Device:
         )
 
         return command.text
+
+    def get_last_restart(self):
+        try:
+            payload = [
+                {
+                    "command": "db.get",
+                    "path": "Debug.Restarts.Count"
+                }
+            ]
+
+            command = self.session.post(
+                (
+                    "https://"
+                    + self.ip
+                    + "/ajax?sid="
+                    + self.sid
+                ),
+                timeout=self.timeout,
+                verify=False,
+                json=payload
+            )
+
+            output = "NO_RESTART_RECORD"
+
+            if int(command.json()[0]["value"]) > 0:
+
+                payload = [
+                    {
+                        "command": "db.get",
+                        "path": "Debug.Restarts.Row[0].Details"
+                    },
+                    {
+                        "command": "db.get",
+                        "path": "Debug.Restarts.Row[0].LocalTime"
+                    },
+                    {
+                        "command": "db.get",
+                        "path": "Debug.Restarts.Row[0].Reason"
+                    },
+                    {
+                        "command": "db.get",
+                        "path": "Debug.Restarts.Row[0].UpTime"
+                    },
+                    {
+                        "command": "db.get",
+                        "path": "Debug.Restarts.Row[0].Version"
+                    }
+                ]
+
+                command = self.session.post(
+                    (
+                        "https://"
+                        + self.ip
+                        + "/ajax?sid="
+                        + self.sid
+                    ),
+                    timeout=self.timeout,
+                    verify=False,
+                    json=payload
+                )
+
+                output = ""
+                for e in command.json():
+                    output += e["value"] + "  "
+            return output
+
+        except:
+            return "READING_FAILED"
